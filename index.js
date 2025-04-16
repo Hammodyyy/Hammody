@@ -10,51 +10,56 @@ const PORT = process.env.PORT || 3000;
 const queue = [];
 let active = false;
 
-const RATE_LIMIT_DELAY = 350; // milliseconds between requests
-const RETRY_DELAY = 2000; // retry delay if 429 hit
+const RATE_LIMIT_DELAY = 400;
+const RETRY_DELAY = 2000;
 const MAX_RETRIES = 3;
 
-async function fetchGameStats(url, attempt = 1) {
+async function safeFetch(url, attempt = 1) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(res.status.toString());
+    return await res.json();
+  } catch (err) {
+    if (attempt < MAX_RETRIES) {
+      await new Promise(r => setTimeout(r, RETRY_DELAY));
+      return safeFetch(url, attempt + 1);
+    }
+    console.warn("Fetch failed:", err.message || err);
+    throw err;
+  }
+}
+
+async function fetchGameStats(url) {
   try {
     const placeId = url.match(/games\/(\d+)/)?.[1];
     if (!placeId) throw new Error("Invalid game URL");
 
-    const universeRes = await fetch(
-      `https://apis.roblox.com/universes/v1/places/${placeId}/universe`
-    );
-    if (!universeRes.ok) throw new Error("Failed to get universeId");
-    const { universeId } = await universeRes.json();
+    const universeUrl = `https://apis.roblox.com/universes/v1/places/${placeId}/universe`;
+    const { universeId } = await safeFetch(universeUrl);
 
-    const gameRes = await fetch(
-      `https://games.roblox.com/v1/games?universeIds=${universeId}`
-    );
-    if (!gameRes.ok) throw new Error("Failed to fetch game stats");
-    const game = (await gameRes.json())?.data?.[0];
+    const gameUrl = `https://games.roblox.com/v1/games?universeIds=${universeId}`;
+    const result = await safeFetch(gameUrl);
 
+    const game = result?.data?.[0];
     return {
       playing: game?.playing || 0,
       visits: game?.visits || 0,
       created: game?.created,
-      updated: game?.lastUpdated,
+      updated: game?.lastUpdated
     };
   } catch (err) {
-    if (err.message.includes("429") && attempt < MAX_RETRIES) {
-      await new Promise((r) => setTimeout(r, RETRY_DELAY));
-      return fetchGameStats(url, attempt + 1);
-    }
-    console.warn("Fetch failed:", err.message);
     return null;
   }
 }
 
 function processQueue() {
   if (active || queue.length === 0) return;
-
   active = true;
+
   const { url, res } = queue.shift();
 
   fetchGameStats(url)
-    .then((data) => res.json(data || { error: "Failed to fetch stats" }))
+    .then(data => res.json(data || { error: "Failed to fetch stats" }))
     .catch(() => res.json({ error: "Unexpected failure" }))
     .finally(() => {
       setTimeout(() => {
