@@ -9,7 +9,6 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 const queue = [];
 let active = false;
-let cooldownUntil = 0;
 
 const RATE_LIMIT_DELAY = 400;
 const RETRY_DELAY = 2000;
@@ -18,11 +17,6 @@ const MAX_RETRIES = 3;
 async function safeFetch(url, attempt = 1) {
   try {
     const res = await fetch(url);
-    if (res.status === 429) {
-      console.warn("⚠️ Rate limited by Roblox. Delaying...");
-      cooldownUntil = Date.now() + 10000;
-      throw new Error("429");
-    }
     if (!res.ok) throw new Error(res.status.toString());
     return await res.json();
   } catch (err) {
@@ -30,6 +24,7 @@ async function safeFetch(url, attempt = 1) {
       await new Promise(r => setTimeout(r, RETRY_DELAY));
       return safeFetch(url, attempt + 1);
     }
+    console.warn("Fetch failed:", err.message || err);
     throw err;
   }
 }
@@ -52,16 +47,15 @@ async function fetchGameStats(url) {
       created: game?.created,
       updated: game?.lastUpdated
     };
-  } catch {
+  } catch (err) {
     return null;
   }
 }
 
 function processQueue() {
   if (active || queue.length === 0) return;
-  if (Date.now() < cooldownUntil) return; // Wait out rate limit window
-
   active = true;
+
   const { url, res } = queue.shift();
 
   fetchGameStats(url)
@@ -84,5 +78,5 @@ app.get("/stats", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log("Backend v4 ready on port", PORT);
+  console.log("Server ready on port", PORT);
 });
